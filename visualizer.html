@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>SAC 訓練日誌可視化工具</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background: #f4f7f6; }
+        .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h2 { color: #333; text-align: center; }
+        .upload-section { border: 2px dashed #ccc; padding: 30px; text-align: center; margin-bottom: 20px; cursor: pointer; }
+        .upload-section:hover { border-color: #4A90E2; }
+        canvas { margin-top: 20px; }
+        .stats { display: flex; justify-content: space-around; margin-bottom: 20px; font-weight: bold; color: #555; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>📊 SAC 訓練參數可視化</h2>
+    
+    <div class="upload-section" onclick="document.getElementById('fileInput').click()">
+        點擊或拖拽 CSV 檔案至此處
+        <input type="file" id="fileInput" accept=".csv" style="display:none">
+    </div>
+
+    <div class="stats" id="summary"></div>
+    
+    <canvas id="lossChart"></canvas>
+    <canvas id="alphaChart" style="margin-top: 50px;"></canvas>
+</div>
+
+<script>
+    const fileInput = document.getElementById('fileInput');
+    let lossChart, alphaChart;
+
+    fileInput.onchange = function(e) {
+        const file = e.target.files[0];
+        Papa.parse(file, {
+            header: true,
+            dynamicTyping: true,
+            complete: function(results) {
+                renderCharts(results.data.filter(d => d.global_ep !== null));
+            }
+        });
+    };
+
+    function renderCharts(data) {
+        const labels = data.map((d, i) => d.step || i);
+        const criticLoss = data.map(d => d.critic_loss);
+        const actorLoss = data.map(d => d.actor_loss);
+        const alpha = data.map(d => d.alpha);
+
+        // 更新摘要
+        document.getElementById('summary').innerHTML = `
+            <span>總步數: ${labels.length}</span>
+            <span>最後 Critic Loss: ${criticLoss[criticLoss.length-1].toFixed(4)}</span>
+            <span>最後 Alpha: ${alpha[alpha.length-1].toFixed(4)}</span>
+        `;
+
+        if(lossChart) lossChart.destroy();
+        if(alphaChart) alphaChart.destroy();
+
+        // 圖表 1: Loss 曲線
+        lossChart = new Chart(document.getElementById('lossChart'), {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [
+                    { label: 'Critic Loss', data: criticLoss, borderColor: '#e74c3c', borderWidth: 1.5, fill: false, yAxisID: 'y' },
+                    { label: 'Actor Loss', data: actorLoss, borderColor: '#3498db', borderWidth: 1.5, fill: false, yAxisID: 'y1' }
+                ]
+            },
+            options: {
+                responsive: true,
+                interaction: { mode: 'index', intersect: false },
+                scales: {
+                    y: { type: 'linear', display: true, position: 'left', title: { display: true, text: 'Critic Loss' } },
+                    y1: { type: 'linear', display: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'Actor Loss' } }
+                }
+            }
+        });
+
+        // 圖表 2: Alpha 曲線
+        alphaChart = new Chart(document.getElementById('alphaChart'), {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{ label: 'Alpha (Entropy)', data: alpha, borderColor: '#f1c40f', borderWidth: 2, backgroundColor: 'rgba(241, 196, 15, 0.1)', fill: true }]
+            },
+            options: {
+                responsive: true,
+                scales: { y: { title: { display: true, text: 'Alpha Value' } } }
+            }
+        });
+    }
+</script>
+</body>
+</html>

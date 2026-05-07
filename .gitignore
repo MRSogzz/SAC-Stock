@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+
+# Frontend
+node_modules/
+dist/
+build/
+
+# Local/runtime artifacts
+*.log
+*.tmp
+.env
+.env.*
+.codex-gitconfig
+
+# Generated model/data artifacts
+backend/storage/
+backend/history/
+backend/cache/
+backend/bak_models/
+*.pkl
+
+# Generated reports and analysis outputs
+backend/report.html
+backend/oracle_dashboard.html
+backend/trade_details_full.html
+backend/*_optimal_path.png
+backend/portfolio_*.png
+backend/optimal_trades_log.csv
