@@ -57,6 +57,18 @@ def diag_backtest_curve(actor, scalers: dict, feat_dict: dict,
     """
     import pandas as pd
 
+    if isinstance(stock_ids, (int, float)) and isinstance(initial_capital, list):
+        feat_dict, prices_dict, volumes_dict, stock_ids, initial_capital, dates, logger = (
+            scalers,
+            feat_dict,
+            prices_dict,
+            volumes_dict,
+            stock_ids,
+            initial_capital,
+            dates,
+        )
+        scalers = {}
+
     try:
         from configs.trading_config import (
             LOT_SIZE, MIN_FEE_LOT, MIN_FEE_ODD,
@@ -80,13 +92,13 @@ def diag_backtest_curve(actor, scalers: dict, feat_dict: dict,
     # ── 標準化特徵 ───────────────────────────────────────────────────────────
     scaled = {}
     for sid in OBS:
-        if sid not in feat_dict or sid not in scalers:
+        if sid not in feat_dict:
             continue
         feat = feat_dict[sid].values[:n_steps].copy().astype(np.float64)
         feat = np.where(np.isnan(feat), 0.0, feat)
-        scaled[sid] = np.clip(
-            scalers[sid].transform(feat), -5.0, 5.0
-        ).astype(np.float32)
+        feat = np.where(np.isposinf(feat), 10.0, feat)
+        feat = np.where(np.isneginf(feat), -10.0, feat)
+        scaled[sid] = np.clip(feat, -10.0, 10.0).astype(np.float32)
 
     # ── 滾動平均成交量 ───────────────────────────────────────────────────────
     avg_vol = {}

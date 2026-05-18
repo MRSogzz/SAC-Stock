@@ -22,17 +22,60 @@ build/
 .env.*
 .codex-gitconfig
 
-# Generated model/data artifacts
-backend/storage/
+# Models & storage（訓練產物，體積大且不應版控）
+*.pkl
+backend/storage/models/
+backend/storage/cache/
+backend/storage/history/
+
+# 舊路徑相容（避免殘留）
 backend/history/
 backend/cache/
 backend/bak_models/
-*.pkl
 
-# Generated reports and analysis outputs
+# 診斷與分析輸出（本地產生，不納入版控）
+backend/diagnostics/output/
+backend/reports/alpha_validation/
+
+# 訓練過程 log
+backend/storage/history/debug_logs/
+backend/storage/history/training_logs/
+
+# 每日預測紀錄（runtime 產生）
+backend/storage/history/predictions.csv
+run_log.txt
+
+# 舊版散落的報告與圖表
 backend/report.html
 backend/oracle_dashboard.html
 backend/trade_details_full.html
 backend/*_optimal_path.png
 backend/portfolio_*.png
 backend/optimal_trades_log.csv
+
+# 歸因分析腳本（另一個專案用）
+backend/attri.py
+backend/attribution_report.py
+backend/attribution_report.html
+backend/attribution_report.meta.json
+backend/my_analysis.md
+backend/my_analysis.meta.json
+
+# diagnostics 新增腳本（只保留目錄結構與 output）
+backend/diagnostics/alpha_existence_audit.py
+backend/diagnostics/alpha_geometry_identification.py
+backend/diagnostics/final_active_return_validation.py
+backend/diagnostics/friction_attribution_phase1.py
+backend/diagnostics/friction_attribution_phase2.py
+backend/diagnostics/friction_attribution_phase3.py
+backend/diagnostics/friction_attribution_phase4.py
+backend/diagnostics/geometry_analyzer.py
+backend/diagnostics/policy_autopsy.py
+backend/diagnostics/probe_plasticity.py
+backend/diagnostics/signal_chain_audit.py
+
+# storage 完整忽略
+backend/storage/
+
+# 廢棄備份檔案
+*_bak.py

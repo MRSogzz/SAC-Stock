@@ -12,8 +12,8 @@ from pydantic import BaseModel
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from src.engine.trainer import train, validate, predict_next, list_models
-from src.engine.walk_forward import (
+from src.engine.trainer_standard import train, validate, predict_next, list_models
+from src.engine.trainer_walk_forward import (
     train_walkforward, train_experiment_matrix, predict_walkforward,
 )
 from src.utils.common import sanitize
@@ -21,6 +21,7 @@ from configs.base_config import HISTORY_DIR
 from configs.trading_config import STOCK_POOL
 
 from diagnostics import export_md, show_registry
+from routers.alpha_validation import router as alpha_router
 
 HISTORY_FILE = os.path.join(HISTORY_DIR, "predictions.csv")
 os.makedirs(HISTORY_DIR, exist_ok=True)
@@ -28,6 +29,8 @@ os.makedirs(HISTORY_DIR, exist_ok=True)
 app = FastAPI(title="Portfolio AI API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"],
                    allow_methods=["*"], allow_headers=["*"])
+
+app.include_router(alpha_router, prefix="/alpha_validation", tags=["Alpha Validation"])
 
 jobs: dict = {}
 
@@ -231,7 +234,7 @@ def walkforward_status():
     查詢各 Run（A/B/C/D）各窗口模型的狀態和績效摘要。
     """
     import pickle
-    from src.engine.walk_forward import wf_meta_path, window_model_path
+    from src.engine.persistence import wf_meta_path, window_model_path
 
     result = {"runs": {}}
 
@@ -343,3 +346,62 @@ def get_stock_pool():
 @app.get("/health")
 def health():
     return {"ok": True}
+
+@app.get("/debug/feat")
+def debug_feat():
+    import traceback, textwrap
+    try:
+        from evaluation.alpha_validator import AlphaValidator
+
+        code = """
+def compute_fn(stocks):
+    import pandas as pd
+    result = {}
+    for sid, df in stocks.items():
+        feat = pd.DataFrame(index=df.index)
+        feat["ret_3"] = df["Close"].pct_change(3)
+        result[sid] = feat
+    return result
+"""
+        ns = {}
+        exec(textwrap.dedent(code), ns)
+        fn = ns["compute_fn"]
+
+        validator = AlphaValidator(
+            baseline_model_path="storage/models/portfolio_w2_runD.pkl",
+            validation_period=("2025-10-02", "2026-05-07"),
+            data_period="6y",
+        )
+
+        # 直接呼叫 compute_fn 看 index 狀況
+        import pandas as pd
+        new_feats = fn(validator._stocks)
+        first_sid = list(new_feats.keys())[0]
+        new_df = new_feats[first_sid]
+        base_df = validator._baseline_feat_dfs[first_sid]
+
+        common_idx = base_df.index.intersection(new_df.index)
+        extra = new_df.reindex(common_idx)
+        merged = pd.concat([base_df.loc[common_idx], extra], axis=1)
+
+        # 找出重複的列（iloc 問題的根源）
+        dup_idx = merged.index[merged.index.duplicated()].tolist()
+
+        return {
+            "first_sid": first_sid,
+            "new_feat_index_has_dup": bool(new_df.index.duplicated().any()),
+            "base_index_has_dup":     bool(base_df.index.duplicated().any()),
+            "extra_index_has_dup":    bool(extra.index.duplicated().any()),
+            "merged_index_has_dup":   bool(merged.index.duplicated().any()),
+            "merged_col_dups":        [c for c in merged.columns if list(merged.columns).count(c) > 1],
+            "dup_index_samples":      [str(x) for x in dup_idx[:5]],
+            "new_feat_shape":  list(new_df.shape),
+            "base_shape":      list(base_df.shape),
+            "merged_shape":    list(merged.shape),
+            "new_feat_index_type": str(new_df.index.dtype),
+            "base_index_type":    str(base_df.index.dtype),
+            # 測試 iloc 取值
+            "iloc_test": str(type(merged.iloc[100]["ret_3"])),
+        }
+    except Exception as e:
+        return {"error": str(e), "tb": traceback.format_exc()[-2000:]}

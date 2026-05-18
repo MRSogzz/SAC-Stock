@@ -21,7 +21,6 @@ v7 改動：
 import math
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
 
 from configs.trading_config import (
     N_FEATURES, LOT_SIZE,
@@ -113,19 +112,11 @@ class PortfolioEnv:
 
         for sid in self.observable_ids:
             feat = features_dict[sid].values[:self.n_steps].copy().astype(np.float64)
-            feat = np.where(np.isposinf(feat),  1e6, feat)
-            feat = np.where(np.isneginf(feat), -1e6, feat)
+            feat = np.where(np.isposinf(feat),  10.0, feat)
+            feat = np.where(np.isneginf(feat), -10.0, feat)
             feat = np.where(np.isnan(feat),      0.0, feat)
 
-            if scalers and sid in scalers:
-                scaler = scalers[sid]
-                scaled = scaler.transform(feat)
-            else:
-                scaler = StandardScaler()
-                scaled = scaler.fit_transform(feat)
-
-            self.features[sid] = np.clip(scaled, -5.0, 5.0).astype(np.float32)
-            self.scalers[sid]  = scaler
+            self.features[sid] = np.clip(feat, -10.0, 10.0).astype(np.float32)
             self.prices[sid]   = prices_dict[sid][:self.n_steps]
 
         for sid in self.tradeable_ids:

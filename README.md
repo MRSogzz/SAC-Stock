@@ -7,34 +7,64 @@
 ## 技術架構
 
 ```
-backend/
-├── configs/
-│   ├── base_config.py        # 路徑、裝置（CPU/GPU）、快取設定
-│   └── trading_config.py     # 股票池、手續費、SAC 超參數
-├── src/
-│   ├── data/
-│   │   ├── loader.py          # FinMind API 下載 + 24 小時快取
-│   │   └── processor.py       # 特徵工程（21 個技術特徵）、標準化、對齊
-│   ├── environment/
-│   │   ├── portfolio.py       # PortfolioEnv（交易環境、整張/零股狀態追蹤）
-│   │   └── reward.py          # CompositeReward（8 項組合式獎勵函數）
-│   ├── models/
-│   │   └── architectures.py   # PortfolioActor、PortfolioCritic（Twin Q）
-│   ├── agents/
-│   │   ├── base.py            # BaseAgent 抽象類
-│   │   ├── sac_agent.py       # SAC 完整實現
-│   │   └── memory.py          # ReplayBuffer
-│   ├── engine/
-│   │   ├── trainer.py         # train、validate、predict_next、模型存取
-│   │   └── backtester.py      # 回測引擎（整張/零股委託、升級邏輯）
-│   └── utils/
-│       ├── finance.py         # calc_fee、calc_shares、MDD、Sharpe、Sortino
-│       └── common.py          # 時間格式、sanitize、safe_float
-├── server.py                  # FastAPI 入口（含 APScheduler）
-├── main.py                    # CLI 入口（不需啟動後端）
-├── daily_predict.py           # Windows 工作排程器用獨立預測腳本
-├── run_daily.bat              # 批次執行腳本
-└── requirements.txt
+專案根目錄
+├── visualizer.html                    # 獨立的視覺化頁面
+├── backend/                           # Python 後端（核心運算與 API 服務）
+│   ├── configs/
+│   │   ├── base_config.py             # 路徑、裝置（CPU/GPU）、快取設定
+│   │   └── trading_config.py          # 股票池、手續費、SAC 超參數
+│   ├── src/
+│   │   ├── agents/
+│   │   │   ├── base.py                # BaseAgent 抽象類
+│   │   │   ├── sac_agent.py           # SAC 完整實現
+│   │   │   └── memory.py              # ReplayBuffer
+│   │   ├── data/
+│   │   │   ├── loader.py              # FinMind API 下載 + 24 小時快取
+│   │   │   └── processor.py           # 特徵工程（21 個技術特徵）、標準化、對齊
+│   │   ├── engine/
+│   │   │   ├── backtester.py          # 回測引擎（整張/零股委託、升級邏輯）
+│   │   │   ├── trainer_standard.py    # 標準訓練器
+│   │   │   └── trainer_walk_forward.py# Walk-Forward 訓練器
+│   │   ├── environment/
+│   │   │   ├── portfolio.py           # PortfolioEnv（交易環境、整張/零股狀態追蹤）
+│   │   │   ├── reshaping_engine.py    # 獎勵重塑引擎
+│   │   │   └── reward.py              # CompositeReward（8 項組合式獎勵函數）
+│   │   ├── inference/
+│   │   │   └── predictor.py           # 使用已訓練模型進行每日預測
+│   │   ├── models/
+│   │   │   └── architectures.py       # PortfolioActor、PortfolioCritic（Twin Q）
+│   │   └── utils/
+│   │       ├── finance.py             # calc_fee、calc_shares、MDD、Sharpe、Sortino
+│   │       └── common.py              # 時間格式、sanitize、safe_float
+│   ├── diagnostics/                   # 深度分析工具（因子審計、摩擦歸因、策略解剖等）
+│   │   └── output/                    # 診斷圖表與 JSON 報告輸出
+│   ├── evaluation/                    # 三層評估框架
+│   │   ├── layer1_signal.py           # 信號品質
+│   │   ├── layer2_strategy.py         # 策略表現
+│   │   └── layer3_robustness.py       # 穩健性測試
+│   ├── reports/alpha_validation/      # 已存檔的因子驗證 JSON 報告
+│   ├── routers/
+│   │   └── alpha_validation.py        # Alpha 因子驗證 API 路由
+│   ├── storage/
+│   │   ├── cache/                     # 依股票代碼與時間區間快取的市場資料 CSV
+│   │   ├── history/                   # 歷史預測紀錄（predictions.csv）與除錯日誌
+│   │   └── models/                    # Walk-Forward 訓練的模型 .pkl 檔
+│   ├── server.py                      # FastAPI 入口（含 APScheduler）
+│   ├── main.py                        # CLI 入口（不需啟動後端）
+│   ├── daily_predict.py               # Windows 工作排程器用獨立預測腳本
+│   ├── run_daily.bat                  # 批次執行腳本
+│   ├── calc_ic.py                     # 計算 IC（資訊係數）
+│   ├── attri.py / attribution_report.py # 績效歸因分析
+│   └── requirements.txt
+└── frontend/                          # React + Vite 前端（儀表板 UI）
+    ├── features/
+    │   ├── AlphaValidation/           # 因子驗證介面（三層評估、報告清單、判決徽章）
+    │   ├── StandardTraining/          # 標準訓練控制介面
+    │   ├── WalkForwardTraining/       # Walk-Forward 訓練監控
+    │   └── SystemStatus/             # 系統狀態總覽與排程器面板
+    ├── components/                    # 共用元件（MetricCard、PortfolioChart 等）
+    ├── hooks/                         # 自訂 Hooks（useTraining、useWalkForward 等）
+    └── constants/config.js            # 前端組態（後端 API 網址等）
 ```
 
 ---
@@ -69,7 +99,7 @@ backend/
 ```bash
 pip install -r requirements.txt
 
-# GPU 版 PyTorch（RTX 3050 / CUDA 12.4）
+# GPU 版 PyTorch（RTX xxxx / CUDA 12.4）
 pip install torch --index-url https://download.pytorch.org/whl/cu124
 
 # APScheduler
@@ -86,7 +116,7 @@ uvicorn server:app --reload --port 8000
 啟動時會自動顯示使用的運算裝置：
 
 ```
-使用 GPU：NVIDIA GeForce RTX 3050
+使用 GPU：NVIDIA GeForce RTX xxxx
 APScheduler 已啟動，下次執行：2025-xx-xx 15:30:00+08:00
 ```
 
@@ -132,6 +162,11 @@ python main.py predict --period 5y
 | Target Entropy | -5.0（= -n_stocks × 0.5） |
 | α 最小值 | 0.05（防止探索崩潰） |
 
+### 訓練模式
+
+- **標準訓練**：固定訓練期間，單次跑完後驗證，適合快速迭代調參。
+- **Walk-Forward 訓練**：滾動視窗訓練與驗證，每個視窗結果可跨 Run 比較，用於評估策略穩健性。
+
 ### 獎勵函數（8 項）
 
 1. **持倉收益**：非對稱設計，虧損懲罰 ×2
@@ -161,11 +196,23 @@ python main.py predict --period 5y
 - **自動升級**：零股累積至 1000 股時，評估「未來累積懲罰 vs 升級手續費」，划算才執行升級（賣零股 → 買整張）
 - **減倉規則**：整張只能整張賣，不足一張的零頭保留為零股
 
+### Alpha 因子驗證
+
+`evaluation/` 模組提供三層結構化評估框架：
+
+| 層級 | 模組 | 職責 |
+|------|------|------|
+| Layer 1 | `layer1_signal.py` | 信號品質（IC、Rank IC 等） |
+| Layer 2 | `layer2_strategy.py` | 策略表現（回測、換手率等） |
+| Layer 3 | `layer3_robustness.py` | 穩健性測試（壓力測試、過擬合檢測等） |
+
+驗證結果 JSON 報告存於 `reports/alpha_validation/`，涵蓋 RSI、布林帶、成交量等數十種技術指標。`diagnostics/` 則提供更深度的分析，包含因子存在性審計、Alpha 幾何結構辨識、摩擦歸因（分四階段）與可塑性探測，輸出圖表與 JSON 至 `diagnostics/output/`。
+
 ---
 
 ## 模型存取
 
-模型自動存於 `storage/models/portfolio_{period}.pkl`，包含：
+模型自動存於 `storage/models/`，包含：
 
 - Actor / Critic 網路權重
 - StandardScaler（各股特徵標準化參數）
@@ -206,6 +253,7 @@ python main.py predict --period 5y
 | GET | `/predict/{period}` | 明日持倉建議 |
 | GET | `/models` | 列出已存模型 |
 | GET | `/stock-pool` | 股票池清單 |
+| GET | `/alpha-validation/{feature}` | 指定特徵的因子驗證結果 |
 | GET | `/scheduler/status` | 排程狀態 |
 | POST | `/scheduler/run-now` | 立即執行預測 |
 | GET | `/scheduler/history` | 歷史預測紀錄 |

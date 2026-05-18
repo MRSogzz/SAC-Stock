@@ -48,7 +48,6 @@ def _odd_fill(order_shares: int, avg_vol: float) -> int:
     module="Engine",
     inputs={
         "actor":           "PortfolioActor",
-        "scalers":         "dict[str, StandardScaler]",
         "feat_dict":       "dict[str, pd.DataFrame]",
         "prices_dict":     "dict[str, np.ndarray]",
         "volumes_dict":    "dict[str, np.ndarray]",
@@ -62,7 +61,6 @@ def _odd_fill(order_shares: int, avg_vol: float) -> int:
 )
 def run_backtest(
     actor,
-    scalers:         dict,
     feat_dict:       dict,
     prices_dict:     dict,
     volumes_dict:    dict,
@@ -70,7 +68,19 @@ def run_backtest(
     initial_capital: float,
     feat_names:      list,
     dates:           list,
+    maybe_dates:     list = None,
+    **kwargs,
 ) -> dict:
+    if maybe_dates is not None:
+        feat_dict, prices_dict, volumes_dict, stock_ids, initial_capital, feat_names, dates = (
+            prices_dict,
+            volumes_dict,
+            stock_ids,
+            initial_capital,
+            feat_names,
+            dates,
+            maybe_dates,
+        )
 
     n_stocks = len(stock_ids)
     n_steps  = min(len(v) for v in feat_dict.values())
@@ -78,15 +88,13 @@ def run_backtest(
     # ── 標準化特徵 ───────────────────────────────────────────────────────
     scaled = {}
     for sid in OBSERVABLE_STOCKS:
-        if sid not in feat_dict or sid not in scalers:
+        if sid not in feat_dict:
             continue
         feat = feat_dict[sid].values[:n_steps].copy().astype(np.float64)
-        feat = np.where(np.isposinf(feat),  1e6, feat)
-        feat = np.where(np.isneginf(feat), -1e6, feat)
+        feat = np.where(np.isposinf(feat),  10.0, feat)
+        feat = np.where(np.isneginf(feat), -10.0, feat)
         feat = np.where(np.isnan(feat),      0.0, feat)
-        scaled[sid] = np.clip(
-            scalers[sid].transform(feat), -5.0, 5.0
-        ).astype(np.float32)
+        scaled[sid] = np.clip(feat, -10.0, 10.0).astype(np.float32)
 
     # ── 預計算 20 日滾動平均成交量（與 PortfolioEnv 一致）────────────────
     avg_vol = {}

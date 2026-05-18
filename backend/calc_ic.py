@@ -35,7 +35,6 @@ def calc_ic(period: str = "5y", val_days: int = 250):
     actor.to(DEVICE)
     actor.eval()
 
-    scalers   = payload["scalers"]
     stock_ids = TRADEABLE_STOCKS   # 9 支可交易
 
     print(f"模型訓練時間：{payload.get('saved_at')}")
@@ -45,7 +44,7 @@ def calc_ic(period: str = "5y", val_days: int = 250):
 
     # ── 載入數據 ──────────────────────────────────────────────────────────
     stocks = load_all_stocks(period)
-    feat_dfs, prices_dict, feat_names, dates = align_features(stocks)
+    feat_dfs, prices_dict, _, feat_names, dates = align_features(stocks)
 
     total = len(feat_dfs[stock_ids[0]])
     if total <= val_days + 60:
@@ -61,13 +60,13 @@ def calc_ic(period: str = "5y", val_days: int = 250):
     # 標準化特徵
     scaled = {}
     for sid in OBSERVABLE_STOCKS:
-        if sid not in val_feat or sid not in scalers:
+        if sid not in val_feat:
             continue
         feat = val_feat[sid].values.copy().astype(np.float64)
-        feat = np.where(np.isposinf(feat),  1e6, feat)
-        feat = np.where(np.isneginf(feat), -1e6, feat)
+        feat = np.where(np.isposinf(feat),  10.0, feat)
+        feat = np.where(np.isneginf(feat), -10.0, feat)
         feat = np.where(np.isnan(feat),      0.0, feat)
-        scaled[sid] = np.clip(scalers[sid].transform(feat), -5.0, 5.0)
+        scaled[sid] = np.clip(feat, -10.0, 10.0)
 
     # ── 逐日計算模型預測倉位和實際報酬 ───────────────────────────────────
     ic_daily    = []

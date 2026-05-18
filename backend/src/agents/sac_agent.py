@@ -36,6 +36,14 @@ from src.models.architectures import (
     N_ACTIONS,
 )
 from diagnostics import register, nan_guard
+from src.environment.reshaping_engine import (
+    RegimeConditionedIQNCritic,
+    compute_iqn_critic_loss,
+    soft_update_iqn,
+    regime_labels_to_tensor,
+    N_QUANTILES_TRAIN,
+    IQN_TARGET_TAU,
+)
 
 # gradient clipping 放寬至 0.3（v7）
 GRAD_MAX_NORM = 0.3
@@ -202,24 +210,44 @@ class SACAgentLogitDelta(BaseAgent):
     def __init__(self, state_dim: int, n_stocks: int):
         self.n_stocks  = n_stocks
         self.gamma     = SAC_GAMMA
-        self.tau       = SAC_TAU
+        self.tau       = 0.015          # Phase 1：提升軟更新速率（原 SAC_TAU）
         self.batch     = SAC_BATCH
         self.alpha_min = SAC_ALPHA_MIN
 
         self.actor         = PortfolioActorLogitDelta(state_dim, n_stocks).to(DEVICE)
-        self.critic        = PortfolioCritic(state_dim, n_stocks).to(DEVICE)
-        self.critic_target = PortfolioCritic(state_dim, n_stocks).to(DEVICE)
+        self.critic        = RegimeConditionedIQNCritic(state_dim, n_stocks).to(DEVICE)
+        self.critic_target = RegimeConditionedIQNCritic(state_dim, n_stocks).to(DEVICE)
         self.critic_target.load_state_dict(self.critic.state_dict())
 
-        self.actor_opt  = optim.Adam(self.actor.parameters(),  lr=SAC_LR)
-        self.critic_opt = optim.Adam(self.critic.parameters(), lr=SAC_LR)
+        # ── Phase 1：梯度通道解耦 ─────────────────────────────────────────
+        # Backbone：regime_embed + encoder（處理 s/a/regime）
+        # Quantile Head：tau_embed + fusion + out（處理 τ 分位數）
+        _backbone_params = (
+            list(self.critic.regime_embed.parameters())
+            + list(self.critic.encoder.parameters())
+        )
+        _head_params = (
+            list(self.critic.tau_embed.parameters())
+            + list(self.critic.fusion.parameters())
+            + list(self.critic.out.parameters())
+        )
+
+        self.actor_opt           = optim.Adam(self.actor.parameters(), lr=SAC_LR)
+        self.critic_backbone_opt = optim.Adam(_backbone_params, lr=SAC_LR * 2)
+        self.critic_head_opt     = optim.Adam(_head_params,     lr=SAC_LR * 3)
+        # 向後相容：critic_opt 指向 backbone_opt（供外部程式碼讀取）
+        self.critic_opt = self.critic_backbone_opt
 
         self.target_entropy = SAC_TARGET_ENTROPY
         self.log_alpha = torch.tensor([0.0], requires_grad=True, device=DEVICE)
         self.alpha_opt = optim.Adam([self.log_alpha], lr=SAC_LR * 0.01)
         self.alpha     = self.log_alpha.exp().item()
 
-        # logit_state：(11,) numpy，episode 開始時清零
+        # Phase 1 監控狀態（per-episode 累積）
+        self._phase1_ep_records: list[dict] = []
+        self._phase1_step_buf:   list[dict] = []
+
+        # logit_state：(N_ACTIONS,) numpy，episode 開始時清零
         self._logit_state = np.zeros(N_ACTIONS, dtype=np.float32)
 
         self.buffer = LogitReplayBuffer()
@@ -248,56 +276,116 @@ class SACAgentLogitDelta(BaseAgent):
         # 回傳前 N_STOCKS 維給 env（env 只需要股票權重）
         return raw[:self.n_stocks].astype(np.float32)
 
-    def push_transition(self, obs, action, reward, next_obs, done):
+    def push_transition(self, obs, action, reward, next_obs, done,
+                        regime_label: str = "sideways"):
         """
-        推入 transition，額外存入 logit_state。
-        呼叫時機：env.step() 之後，_logit_state 已更新為 L_{t+1}。
+        推入 transition，額外存入 logit_state 與 regime_label。
+        regime_label：當前市場狀態（'bull'/'bear'/'sideways'），
+                      供 IQN Critic 條件化使用。預設 'sideways' 向後相容。
         """
         self.buffer.push(
             obs, action, reward, next_obs, done,
-            self._logit_state.copy()   # 存入更新後的 L_{t+1}
+            self._logit_state.copy(),
+            regime_label,
         )
 
     @register(
         module="Agent",
         inputs={},
         outputs={"critic_loss": "float", "actor_loss": "float", "alpha_loss": "float"},
-        notes="LogitDelta SAC 三段更新；grad_clip=0.3",
+        notes="LogitDelta SAC 三段更新；Phase 1 梯度解耦；IQN Critic + Regime 條件化",
     )
     def update(self) -> dict | None:
         if len(self.buffer) < max(self.batch, 5000):
             return None
 
-        s, a, r, s_, d, logit_t1 = self.buffer.sample(self.batch)
+        s, a, r, s_, d, logit_t1, regime_idx = self.buffer.sample(self.batch)
 
-        # ── Critic update ────────────────────────────────────────────────
+        # ── Critic update（IQN Quantile Huber Loss）──────────────────────
         with torch.no_grad():
             w_, new_l_, lp_ = self.actor.sample(s_, logit_state=logit_t1)
             a_stock_         = w_[:, :self.n_stocks]
-            q_next           = self.critic_target.q_min(s_, a_stock_) - self.alpha * lp_
-            q_tgt            = r + self.gamma * (1 - d) * q_next
-            # Q-target clamp：臨時保險絲，防止 LinearDownsideReward 初期 reward 尺度
-            # 導致 Q 發散。Q 真實範圍 ≈ ±R_max/(1-γ) ≈ ±20，±50 留有充足裕度。
-            # 必須在 Critic loss 連續 5000 步維持在 1.0 以下後移除。
-            q_tgt = q_tgt.clamp(-50.0, 50.0)
 
-        q1, q2 = self.critic(s, a)
-        c_loss = F.mse_loss(q1, q_tgt) + F.mse_loss(q2, q_tgt)
-        self.critic_opt.zero_grad()
+        c_loss = compute_iqn_critic_loss(
+            critic        = self.critic,
+            critic_target = self.critic_target,
+            state         = s,
+            action        = a,
+            reward        = r,
+            next_state    = s_,
+            done          = d,
+            next_action   = a_stock_,
+            log_pi        = lp_,
+            regime_idx    = regime_idx,
+            gamma         = self.gamma,
+            alpha         = self.alpha,
+            n_tau_pred    = N_QUANTILES_TRAIN,
+            n_tau_target  = N_QUANTILES_TRAIN,
+        )
+
+        # Phase 1：分別更新 backbone 和 quantile head（不同 LR）
+        self.critic_backbone_opt.zero_grad()
+        self.critic_head_opt.zero_grad()
         c_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), max_norm=GRAD_MAX_NORM)
-        self.critic_opt.step()
 
-        # ── Actor update ─────────────────────────────────────────────────
+        # Backbone：沿用全域 grad clip
+        backbone_params = (
+            list(self.critic.regime_embed.parameters())
+            + list(self.critic.encoder.parameters())
+        )
+        head_params = (
+            list(self.critic.tau_embed.parameters())
+            + list(self.critic.fusion.parameters())
+            + list(self.critic.out.parameters())
+        )
+        grad_norm_backbone = float(
+            torch.nn.utils.clip_grad_norm_(backbone_params, max_norm=GRAD_MAX_NORM).item()
+        )
+        # Quantile Head：獨立 grad clip = 1.0
+        grad_norm_head = float(
+            torch.nn.utils.clip_grad_norm_(head_params, max_norm=1.0).item()
+        )
+
+        self.critic_backbone_opt.step()
+        self.critic_head_opt.step()
+
+        # ── Phase 1 監控指標計算 ──────────────────────────────────────────
+
+        # 1. TD Target Variance
+        with torch.no_grad():
+            tau_t    = self.critic_target.sample_tau(s.shape[0], N_QUANTILES_TRAIN, s.device)
+            z_next   = self.critic_target(s_, a_stock_, tau_t, regime_idx)
+            z_target = r + self.gamma * (1.0 - d) * (z_next - self.alpha * lp_.expand_as(z_next))
+            td_target_var = float(z_target.var().item())
+
+        # 2. Quantile Crossing Rate
+        with torch.no_grad():
+            tau_sorted = torch.linspace(
+                0.05, 0.95, N_QUANTILES_TRAIN, device=s.device
+            ).unsqueeze(0).expand(s.shape[0], -1)
+            z_sorted = self.critic(s, a, tau_sorted, regime_idx)   # (B, N_tau)
+            # 檢查 z[i] <= z[i+1]（分位數應遞增）
+            crossings = (z_sorted[:, :-1] > z_sorted[:, 1:]).float()
+            quantile_crossing_rate = float(crossings.mean().item())
+
+        # ── Actor update ──────────────────────────────────────────────────
         w_new, _, lp = self.actor.sample(s, logit_state=logit_t1)
         a_new_stock  = w_new[:, :self.n_stocks]
-        a_loss = (self.alpha * lp - self.critic.q_min(s, a_new_stock)).mean()
+        q_val        = self.critic.mean_q(s, a_new_stock, regime_idx, N_QUANTILES_TRAIN)
+        a_loss       = (self.alpha * lp - q_val.unsqueeze(1)).mean()
         self.actor_opt.zero_grad()
         a_loss.backward()
         torch.nn.utils.clip_grad_norm_(self.actor.parameters(), max_norm=GRAD_MAX_NORM)
         self.actor_opt.step()
 
-        # ── Alpha update ──────────────────────────────────────────────────
+        # 3. EAR（Entropy-to-Advantage Ratio）
+        with torch.no_grad():
+            advantage = (q_val - q_val.mean()).unsqueeze(1)
+            ear = float(
+                (self.alpha * lp.abs() / (advantage.abs() + 1e-8)).mean().item()
+            )
+
+        # ── Alpha update ───────────────────────────────────────────────────
         al_loss = -(self.log_alpha * (lp + self.target_entropy).detach()).mean()
         self.alpha_opt.zero_grad()
         al_loss.backward()
@@ -306,15 +394,107 @@ class SACAgentLogitDelta(BaseAgent):
             self.log_alpha.clamp_(min=np.log(self.alpha_min))
         self.alpha = self.log_alpha.exp().item()
 
-        # ── Soft update target ───────────────────────────────────────────
-        for p, pt in zip(self.critic.parameters(), self.critic_target.parameters()):
-            pt.data.copy_(self.tau * p.data + (1 - self.tau) * pt.data)
+        # ── Soft update target（Phase 1：tau=0.015）────────────────────────
+        soft_update_iqn(self.critic, self.critic_target, tau=self.tau)
+
+        step_record = {
+            "EAR":                       round(ear, 6),
+            "td_target_var":             round(td_target_var, 6),
+            "quantile_crossing_rate":    round(quantile_crossing_rate, 6),
+            "critic_grad_norm_backbone": round(grad_norm_backbone, 6),
+            "critic_grad_norm_head":     round(grad_norm_head, 6),
+        }
+        self._phase1_step_buf.append(step_record)
 
         return {
             "critic_loss": float(c_loss.item()),
             "actor_loss":  float(a_loss.item()),
             "alpha_loss":  float(al_loss.item()),
+            **step_record,
         }
+
+    def flush_phase1_episode(self, ep: int) -> dict | None:
+        """
+        每 episode 結束後呼叫，將本 episode 的步級監控彙總為 episode 級記錄。
+        自動清空 step buffer。
+        """
+        if not self._phase1_step_buf:
+            return None
+
+        buf = self._phase1_step_buf
+        record = {
+            "ep":                        ep,
+            "EAR":                       round(float(np.mean([x["EAR"] for x in buf])), 6),
+            "td_target_var":             round(float(np.mean([x["td_target_var"] for x in buf])), 6),
+            "quantile_crossing_rate":    round(float(np.mean([x["quantile_crossing_rate"] for x in buf])), 6),
+            "critic_grad_norm_backbone": round(float(np.mean([x["critic_grad_norm_backbone"] for x in buf])), 6),
+            "critic_grad_norm_head":     round(float(np.mean([x["critic_grad_norm_head"] for x in buf])), 6),
+        }
+        self._phase1_ep_records.append(record)
+        self._phase1_step_buf = []
+        return record
+
+    def save_phase1_report(self, output_path: str = None) -> dict:
+        """
+        輸出 phase1_repair_monitoring.json。
+        verdict 依穩定性判據自動生成。
+        """
+        import json, os
+
+        records = self._phase1_ep_records
+        if not records:
+            return {}
+
+        mean_ear      = float(np.mean([r["EAR"] for r in records]))
+        mean_td_var   = float(np.mean([r["td_target_var"] for r in records]))
+        mean_qcr      = float(np.mean([r["quantile_crossing_rate"] for r in records]))
+
+        # 判定 td_target_var 是否呈上升趨勢（後半段 > 前半段）
+        half = len(records) // 2
+        td_vars = [r["td_target_var"] for r in records]
+        td_rising = (
+            np.mean(td_vars[half:]) > np.mean(td_vars[:half]) * 1.1
+            if half > 0 else False
+        )
+
+        if mean_qcr > 0.1:
+            verdict = "CRITICAL"
+        elif mean_qcr > 0.05 and td_rising:
+            verdict = "UNSTABLE"
+        else:
+            verdict = "STABLE"
+
+        report = {
+            "config": {
+                "actor_lr":                    SAC_LR,
+                "critic_backbone_lr":          SAC_LR * 2,
+                "quantile_head_lr":            SAC_LR * 3,
+                "tau_target":                  self.tau,
+                "quantile_head_max_grad_norm": 1.0,
+            },
+            "episodes": records,
+            "summary": {
+                "mean_EAR":                    round(mean_ear, 6),
+                "mean_td_target_var":          round(mean_td_var, 6),
+                "mean_quantile_crossing_rate": round(mean_qcr, 6),
+                "td_var_trend":                "rising" if td_rising else "stable",
+                "verdict":                     verdict,
+            },
+        }
+
+        if output_path is None:
+            output_path = os.path.join(
+                BACKEND_DIR if "BACKEND_DIR" in dir() else ".",
+                "diagnostics", "output", "phase1_repair_monitoring.json"
+            )
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2, ensure_ascii=False)
+        print(f"\n[Phase 1] 監控報告已輸出：{output_path}")
+        print(f"  verdict={verdict}  mean_EAR={mean_ear:.4f}"
+              f"  mean_QCR={mean_qcr:.4f}  td_var_rising={td_rising}")
+
+        return report
 
     def save(self, path: str):
         self.actor.cpu()
@@ -362,10 +542,10 @@ class LogitReplayBuffer:
         self.buffer   = []
         self.pos      = 0
 
-    def push(self, s, a, r, s_, done, logit_t1):
+    def push(self, s, a, r, s_, done, logit_t1, regime_label: str = "sideways"):
         if len(self.buffer) < self.capacity:
             self.buffer.append(None)
-        self.buffer[self.pos] = (s, a, r, s_, done, logit_t1)
+        self.buffer[self.pos] = (s, a, r, s_, done, logit_t1, regime_label)
         self.pos = (self.pos + 1) % self.capacity
 
     def clear(self):
@@ -375,7 +555,7 @@ class LogitReplayBuffer:
 
     def sample(self, batch: int):
         from configs.base_config import DEVICE as _DEVICE
-        indices = np.random.choice(len(self.buffer), batch, replace=False)
+        indices    = np.random.choice(len(self.buffer), batch, replace=False)
         batch_data = [self.buffer[i] for i in indices]
 
         s      = torch.FloatTensor(np.array([d[0] for d in batch_data])).to(_DEVICE)
@@ -384,8 +564,9 @@ class LogitReplayBuffer:
         s_     = torch.FloatTensor(np.array([d[3] for d in batch_data])).to(_DEVICE)
         done   = torch.FloatTensor(np.array([d[4] for d in batch_data])).unsqueeze(1).to(_DEVICE)
         logit  = torch.FloatTensor(np.array([d[5] for d in batch_data])).to(_DEVICE)
+        regime = regime_labels_to_tensor([d[6] for d in batch_data], _DEVICE)
 
-        return s, a, r, s_, done, logit
+        return s, a, r, s_, done, logit, regime
 
     def __len__(self):
         return len(self.buffer)
