@@ -77,7 +77,8 @@ def make_agent(
     run_id="B"/"D" → 依 RUN_CONFIGS 選擇 SACAgentLogitDelta 或 SACAgentDirichlet
     """
     if run_id is None:
-        return SACAgent(state_dim=state_dim, n_stocks=n_stocks)
+        # trainer_standard 現役架構為 LogitDelta（Variant H）
+        return SACAgentLogitDelta(state_dim=state_dim, n_stocks=n_stocks)
 
     cfg = _get_cfg(run_id)
     if cfg["actor"] == "logit":
@@ -98,11 +99,11 @@ def rebuild_actor(
       1. 訓練迴圈中 NaN 時重置 actor。
       2. predictor / validate 中從 payload 重建 actor 後再 load_state_dict。
 
-    run_id=None → PortfolioActor（standard）
+    run_id=None → PortfolioActorLogitDelta（standard，Variant H）
     """
     if run_id is None:
-        from src.models.architectures import PortfolioActor
-        actor = PortfolioActor(state_dim, n_stocks)
+        # trainer_standard 現役架構為 LogitDelta（Variant H），與 make_agent 保持一致
+        actor = PortfolioActorLogitDelta(state_dim, n_stocks)
     else:
         cfg = _get_cfg(run_id)
         if cfg["actor"] == "logit":

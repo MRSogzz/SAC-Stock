@@ -89,8 +89,9 @@ def train(
     env           = make_env(train_feat, train_prices, train_volumes, initial_capital)
     agent         = make_agent(env.state_dim, env.n_tradeable)
 
-    from src.agents.memory import ReplayBuffer
-    agent.buffer = ReplayBuffer()
+    # 不強制覆蓋 buffer，保留 agent 初始化時設定的 buffer 類型
+    # SACAgentLogitDelta 使用 LogitReplayBuffer，強制換成 ReplayBuffer 會導致欄位不符
+    agent.buffer.clear()
 
     episode_returns = []
 
@@ -148,6 +149,9 @@ def train(
         step_count  = 0
         ep_losses   = {"critic_loss": [], "actor_loss": [], "alpha_loss": []}
         trade_count = 0
+        # LogitDelta agent 每 episode 開始時清零 logit state
+        if hasattr(agent, "reset_logit_state"):
+            agent.reset_logit_state()
 
         while not done:
             action = agent.act(obs)
@@ -169,7 +173,12 @@ def train(
 
             if np.isnan(reward) or np.isinf(reward):
                 reward = 0.0
-            agent.buffer.push(obs, action, reward, next_obs, float(done))
+            # LogitReplayBuffer 需要 logit_state 與 regime_label，
+            # 優先使用 push_transition()；舊版 agent 則退回 buffer.push()
+            if hasattr(agent, "push_transition"):
+                agent.push_transition(obs, action, reward, next_obs, float(done))
+            else:
+                agent.buffer.push(obs, action, reward, next_obs, float(done))
             step_count += 1
 
             if step_count > 1:

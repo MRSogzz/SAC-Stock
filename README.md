@@ -17,10 +17,10 @@
 │   │   ├── agents/
 │   │   │   ├── base.py                # BaseAgent 抽象類
 │   │   │   ├── sac_agent.py           # SAC 完整實現
-│   │   │   └── memory.py              # ReplayBuffer
+│   │   │   └── memory.py              # ReplayBuffer / LogitReplayBuffer
 │   │   ├── data/
 │   │   │   ├── loader.py              # FinMind API 下載 + 24 小時快取
-│   │   │   └── processor.py           # 特徵工程（21 個技術特徵）、標準化、對齊
+│   │   │   └── processor.py           # 特徵工程（38 個技術特徵）、標準化、對齊
 │   │   ├── engine/
 │   │   │   ├── backtester.py          # 回測引擎（整張/零股委託、升級邏輯）
 │   │   │   ├── trainer_standard.py    # 標準訓練器
@@ -32,7 +32,7 @@
 │   │   ├── inference/
 │   │   │   └── predictor.py           # 使用已訓練模型進行每日預測
 │   │   ├── models/
-│   │   │   └── architectures.py       # PortfolioActor、PortfolioCritic（Twin Q）
+│   │   │   │   └── architectures.py       # PortfolioActorLogitDelta、PortfolioCritic（IQN Twin Q）
 │   │   └── utils/
 │   │       ├── finance.py             # calc_fee、calc_shares、MDD、Sharpe、Sortino
 │   │       └── common.py              # 時間格式、sanitize、safe_float
@@ -54,7 +54,6 @@
 │   ├── daily_predict.py               # Windows 工作排程器用獨立預測腳本
 │   ├── run_daily.bat                  # 批次執行腳本
 │   ├── calc_ic.py                     # 計算 IC（資訊係數）
-│   ├── attri.py / attribution_report.py # 績效歸因分析
 │   └── requirements.txt
 └── frontend/                          # React + Vite 前端（儀表板 UI）
     ├── features/
@@ -136,13 +135,13 @@ npm run dev
 
 ```bash
 # 訓練
-python main.py train --period 5y --episodes 100 --capital 1000000 --val-days 250
+python main.py train --period 6y --episodes 100 --capital 1000000 --val-days 250
 
 # 驗證（載入已存模型，可用不同資金）
-python main.py validate --period 5y --val-days 250 --capital 300000
+python main.py validate --period 6y --val-days 250 --capital 300000
 
 # 預測明日持倉
-python main.py predict --period 5y
+python main.py predict --period 6y
 ```
 
 ---
@@ -155,14 +154,21 @@ python main.py predict --period 5y
 |------|------|
 | 演算法 | Soft Actor-Critic（SAC） |
 | 動作空間 | 各股目標倉位（0 ~ 40%，連續） |
-| 狀態空間 | 21 特徵 × 10 股 + 10 倉位 + 10 零股比例 + 現金 = 231 維 |
+| 狀態空間 | 38 特徵 × 10 股 + 9 倉位 + 9 零股比例 + 現金 = 399 維 |
 | 批次大小 | 1024 |
-| Replay Buffer | 300,000 |
-| 更新頻率 | 每 4 步更新一次 |
-| Target Entropy | -5.0（= -n_stocks × 0.5） |
-| α 最小值 | 0.05（防止探索崩潰） |
+| Replay Buffer | 500,000 |
+| 更新頻率 | 每 2 步更新一次 |
+| Target Entropy | -2.1 |
+| α 最小值 | 0.1（防止探索崩潰） |
 
-### 訓練模式
+### Actor 架構（Variant H）
+
+現役 Actor 為 **PortfolioActorLogitDelta**，採用 SharedFeatureExtractor + LogitDelta 設計：
+
+- **SharedFeatureExtractor**：所有股票共用同一套權重，每股 38 維特徵 → 32 維 embedding
+- **LogitDelta**：`L_{t+1} = 0.995 × L_t + ΔL`，透過 Leaky Integrator 產生有界連續動作
+- **Critic**：`RegimeConditionedIQNCritic`（IQN 分位數 Q-network，支援市場狀態條件化）
+- **ReplayBuffer**：`LogitReplayBuffer`，每筆 transition 額外儲存 `logit_state` 與 `regime_label`
 
 - **標準訓練**：固定訓練期間，單次跑完後驗證，適合快速迭代調參。
 - **Walk-Forward 訓練**：滾動視窗訓練與驗證，每個視窗結果可跨 Run 比較，用於評估策略穩健性。
