@@ -182,3 +182,65 @@ def load_window_model(window: int, run_id: str) -> dict | None:
         return None
     with open(path, "rb") as f:
         return pickle.load(f)
+
+
+def list_all_models() -> list[dict]:
+    """掃描 MODEL_DIR 列出所有模型（標準 + Walk-Forward），按 saved_at 降序排列。"""
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    models = []
+    for fname in os.listdir(MODEL_DIR):
+        if not fname.endswith(".pkl") or not fname.startswith("portfolio"):
+            continue
+        try:
+            with open(os.path.join(MODEL_DIR, fname), "rb") as f:
+                p = pickle.load(f)
+
+            is_wf = "_run" in fname
+            summary = p.get("summary", {})
+            total_return = summary.get("total_return") or p.get("total_return")
+
+            if is_wf:
+                # Walk-Forward 模型：portfolio_w{window}_run{run_id}.pkl
+                window = p.get("window")
+                run_id = p.get("run_id")
+                period = f"窗口{window} Run{run_id}"
+                episodes_done = p.get("episodes_done") or summary.get("episodes_done")
+                # Walk-Forward summary 的報酬欄位可能是 val_return 或 total_return
+                wf_return = (
+                    summary.get("val_return")
+                    or summary.get("total_return")
+                    or p.get("total_return")
+                )
+                models.append({
+                    "file":          fname,
+                    "model_type":    "walkforward",
+                    "period":        period,
+                    "window":        window,
+                    "run_id":        run_id,
+                    "saved_at":      p.get("saved_at"),
+                    "total_return":  wf_return,
+                    "episodes":      summary.get("episodes"),
+                    "episodes_done": episodes_done,
+                    "stock_ids":     p.get("stock_ids", []),
+                })
+            else:
+                # 標準模型：portfolio_{period}.pkl
+                period = (
+                    p.get("period")
+                    or summary.get("period")
+                    or fname.replace("portfolio_", "").replace(".pkl", "")
+                )
+                episodes_done = summary.get("episodes_done") or summary.get("episodes")
+                models.append({
+                    "file":          fname,
+                    "model_type":    "standard",
+                    "period":        period,
+                    "saved_at":      p.get("saved_at"),
+                    "total_return":  total_return,
+                    "episodes":      summary.get("episodes"),
+                    "episodes_done": episodes_done,
+                    "stock_ids":     p.get("stock_ids", []),
+                })
+        except Exception as e:
+            print(f"list_all_models 讀取 {fname} 失敗：{e}")
+    return sorted(models, key=lambda x: x.get("saved_at", ""), reverse=True)

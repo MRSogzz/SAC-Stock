@@ -1,16 +1,16 @@
 """Trading and model configuration."""
 
 STOCK_POOL = [
-    {"id": "2330", "name": "TSMC", "sector": "Semiconductor"},
-    {"id": "2317", "name": "Hon Hai", "sector": "Electronics"},
-    {"id": "2454", "name": "MediaTek", "sector": "IC Design"},
-    {"id": "2412", "name": "Chunghwa Telecom", "sector": "Telecom"},
-    {"id": "2308", "name": "Delta", "sector": "Electronics"},
-    {"id": "2882", "name": "Cathay Financial", "sector": "Financial"},
-    {"id": "1301", "name": "Formosa Plastics", "sector": "Plastics"},
-    {"id": "2002", "name": "China Steel", "sector": "Steel"},
-    {"id": "2886", "name": "Mega Financial", "sector": "Financial"},
-    {"id": "0050", "name": "Yuanta Taiwan 50", "sector": "ETF"},
+    {"id": "2330", "name": "台積電", "sector": "半導體"},
+    {"id": "2317", "name": "鴻海", "sector": "電子製造"},
+    {"id": "2454", "name": "聯發科", "sector": "IC 設計"},
+    {"id": "2412", "name": "中華電", "sector": "電信"},
+    {"id": "2308", "name": "台達電", "sector": "電源"},
+    {"id": "2882", "name": "國泰金", "sector": "金融"},
+    {"id": "1301", "name": "台塑", "sector": "石化"},
+    {"id": "2002", "name": "中鋼", "sector": "鋼鐵"},
+    {"id": "2886", "name": "兆豐金", "sector": "金融"},
+    {"id": "0050", "name": "元大台灣50", "sector": "ETF"},
 ]
 
 N_STOCKS = len(STOCK_POOL)

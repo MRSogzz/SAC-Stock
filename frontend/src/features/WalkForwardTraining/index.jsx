@@ -1,6 +1,5 @@
 import { useState } from "react";
 import PredictionPanel       from "../../components/PredictionPanel";
-import RunComparisonTable    from "./RunComparisonTable";
 import { useWalkForward }   from "../../hooks/useWalkForward";
 import {
   PERIOD_OPTIONS, CAPITAL_OPTIONS, REGIME_LABEL, REGIME_COLOR,
@@ -26,8 +25,8 @@ export default function WalkForwardTraining() {
       <div style={infoBanner}>
         <div style={{ fontWeight: 500, marginBottom: 6 }}>Walk-forward 訓練策略</div>
         <div style={{ color: "var(--color-text-secondary)", lineHeight: 1.7 }}>
-          將資料切成 3 個滾動窗口（各 3 年訓練 + 1 年驗證），每個窗口獨立訓練一個模型。
-          預測時根據當前市場環境（牛市/熊市/盤整）自動選擇最適合的模型，提升策略泛化能力。
+          將資料切成 2 個滾動窗口（各 3 年訓練 + 1 年驗證），每個窗口獨立訓練一個模型。
+          現役策略為 <strong>Run D</strong>（LogitDelta + Linear）。
         </div>
       </div>
 
@@ -46,7 +45,7 @@ export default function WalkForwardTraining() {
             <input type="range" min={10} max={700} step={10} value={wfEpisodes}
               onChange={(e) => setWfEpisodes(+e.target.value)} style={{ width: "100%" }} />
             <div style={{ fontSize: 11, color: "var(--color-text-tertiary)", marginTop: 4 }}>
-              總計約 {wfEpisodes * 3} 回合（3 個窗口）
+              總計約 {wfEpisodes * 2} 回合（2 個窗口）
             </div>
           </label>
           <label style={labelWrap}>
@@ -62,7 +61,7 @@ export default function WalkForwardTraining() {
         {/* 窗口預覽 */}
         <div style={{ background: "var(--color-background-secondary)", borderRadius: "var(--border-radius-md)", padding: "12px 16px", marginBottom: 16, fontSize: 12 }}>
           <div style={{ fontWeight: 500, marginBottom: 8, color: "var(--color-text-secondary)" }}>窗口規劃（3年訓練 + 1年驗證）</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 8 }}>
             {WALK_FORWARD_WINDOWS.map(({ w, train, val, regime }) => (
               <div key={w} style={{ background: "var(--color-background-primary)", borderRadius: "var(--border-radius-md)", padding: "10px 12px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
@@ -86,7 +85,7 @@ export default function WalkForwardTraining() {
         {status === "running" && (
           <div style={{ marginTop: 12, padding: "10px 14px", borderRadius: "var(--border-radius-md)",
             background: "var(--color-background-secondary)", fontSize: 12, color: "var(--color-text-secondary)" }}>
-            正在訓練 3 個窗口，每個窗口 {wfEpisodes} 回合。訓練時間約 {Math.round(wfEpisodes * 3 * 2 / 60)} 分鐘…
+            正在訓練 2 個窗口，每個窗口 {wfEpisodes} 回合。訓練時間約 {Math.round(wfEpisodes * 2 * 2 / 60)} 分鐘…
           </div>
         )}
         {error && (
@@ -97,19 +96,69 @@ export default function WalkForwardTraining() {
         )}
       </div>
 
-      {/* Run A~D 對比績效表 */}
-      {serverStatus?.runs && (
+      {/* 訓練結果：Run D 各窗口訓練集 / 驗證集報酬 */}
+      {serverStatus?.runs?.D?.windows && (
         <div style={cardStyle}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
             <div>
-              <div style={sectionTitle}>Run A ~ D 策略對比</div>
+              <div style={sectionTitle}>Run D 訓練結果</div>
               <div style={{ fontSize: 12, color: "var(--color-text-secondary)", marginTop: 2 }}>
-                3 個窗口 × 4 種策略的訓練集 / 驗證集報酬
+                2 個窗口的訓練集 / 驗證集報酬
               </div>
             </div>
             <button onClick={fetchServerStatus} style={{ fontSize: 12, padding: "4px 12px" }}>重新整理</button>
           </div>
-          <RunComparisonTable runs={serverStatus.runs} />
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ borderBottom: "0.5px solid var(--color-border-tertiary)" }}>
+                  <th style={{ padding: "8px 12px", textAlign: "left", fontWeight: 500, color: "var(--color-text-secondary)" }}>窗口</th>
+                  <th style={{ padding: "8px 12px", textAlign: "center", fontWeight: 500, color: "var(--color-text-secondary)" }}>驗證期間</th>
+                  <th style={{ padding: "8px 12px", textAlign: "center", fontWeight: 500, color: "var(--color-text-secondary)" }}>訓練報酬</th>
+                  <th style={{ padding: "8px 12px", textAlign: "center", fontWeight: 500, color: "var(--color-text-secondary)" }}>驗證報酬</th>
+                </tr>
+              </thead>
+              <tbody>
+                {serverStatus.runs.D.windows
+                  .filter((w) => w.window <= 2)
+                  .map((w, i) => {
+                    const tr = w.train_return;
+                    const vr = w.val_return;
+                    const retColor = (v) =>
+                      v == null ? "var(--color-text-tertiary)" :
+                      v >= 0    ? "var(--color-text-success)"  :
+                                  "var(--color-text-danger)";
+                    const fmt = (v) => v != null ? `${v >= 0 ? "+" : ""}${v}%` : "—";
+                    return (
+                      <tr key={w.window} style={{ borderBottom: "0.5px solid var(--color-border-tertiary)", background: i % 2 === 0 ? "transparent" : "var(--color-background-secondary)" }}>
+                        <td style={{ padding: "10px 12px", fontWeight: 500 }}>
+                          窗口 {w.window}
+                        </td>
+                        <td style={{ padding: "10px 12px", textAlign: "center", color: "var(--color-text-tertiary)" }}>
+                          {w.val_start?.slice(0, 7) || ""}～{w.val_end?.slice(0, 7) || ""}
+                        </td>
+                        <td style={{ padding: "10px 12px", textAlign: "center", fontFamily: "var(--font-mono)", color: "var(--color-text-secondary)" }}>
+                          {fmt(tr)}
+                        </td>
+                        <td style={{ padding: "10px 12px", textAlign: "center", fontFamily: "var(--font-mono)", fontWeight: 500, color: retColor(vr) }}>
+                          {fmt(vr)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                {/* 平均驗證報酬 */}
+                {serverStatus.runs.D.meta?.avg_val_return != null && (
+                  <tr style={{ borderTop: "1px solid var(--color-border-tertiary)", background: "var(--color-background-secondary)" }}>
+                    <td colSpan={3} style={{ padding: "10px 12px", fontSize: 11, color: "var(--color-text-secondary)", fontWeight: 500 }}>平均驗證報酬</td>
+                    <td style={{ padding: "10px 12px", textAlign: "center", fontFamily: "var(--font-mono)", fontWeight: 600,
+                      color: serverStatus.runs.D.meta.avg_val_return >= 0 ? "var(--color-text-success)" : "var(--color-text-danger)" }}>
+                      {serverStatus.runs.D.meta.avg_val_return >= 0 ? "+" : ""}{serverStatus.runs.D.meta.avg_val_return}%
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 

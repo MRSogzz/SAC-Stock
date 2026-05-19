@@ -13,6 +13,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from src.engine.trainer_standard import train, validate, predict_next, list_models
+from src.engine.persistence import list_all_models
 from src.engine.trainer_walk_forward import (
     train_walkforward, train_experiment_matrix, predict_walkforward,
 )
@@ -337,7 +338,7 @@ def predict(period: str):
 
 @app.get("/models")
 def get_models():
-    return {"models": list_models()}
+    return {"models": list_all_models()}
 
 @app.get("/stock-pool")
 def get_stock_pool():

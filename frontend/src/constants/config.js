@@ -21,9 +21,6 @@ export const REGIME_COLOR = {
 };
 
 export const RUN_DESC = {
-  A: "Composite Reward",
-  B: "LogitDelta + Composite",
-  C: "Linear Downside",
   D: "LogitDelta + Linear",
 };
 
@@ -45,7 +42,6 @@ export const CAPITAL_OPTIONS = [
 ];
 
 export const WALK_FORWARD_WINDOWS = [
-  { w: 1, train: "2020-04 ~ 2023-04", val: "2023-04 ~ 2024-04", regime: "bull"     },
-  { w: 2, train: "2021-04 ~ 2024-04", val: "2024-04 ~ 2025-04", regime: "sideways" },
-  { w: 3, train: "2022-04 ~ 2025-04", val: "2025-04 ~ 2026-04", regime: "bear"     },
+  { w: 1, train: "2021-04 ~ 2024-04", val: "2024-04 ~ 2025-04", regime: "sideways" },
+  { w: 2, train: "2022-04 ~ 2025-04", val: "2025-04 ~ 2026-04", regime: "bear"     },
 ];

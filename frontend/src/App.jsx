@@ -46,7 +46,7 @@ export default function App() {
           <div>
             <div style={{ fontSize: 18, fontWeight: 500 }}>AI 投資組合管理系統</div>
             <div style={{ fontSize: 12, color: "var(--color-text-secondary)", marginTop: 2 }}>
-              Portfolio SAC · 10 支台股 · 31 特徵 · Walk-forward 驗證
+              Portfolio SAC · 10 支台股 · 38 特徵 · Walk-forward 驗證
             </div>
           </div>
           <div style={{
@@ -96,7 +96,10 @@ export default function App() {
               onRunNow={runNow}
               onToggleHistory={toggleHistory}
             />
-            <SavedModelsTable models={savedModels} />
+            <SavedModelsTable
+              models={savedModels}
+              type={activeTab === "walkforward" ? "walkforward" : "standard"}
+            />
           </>
         )}
       </div>

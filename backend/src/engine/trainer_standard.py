@@ -418,8 +418,11 @@ def predict_next(period: str = DEFAULT_PERIOD) -> dict:
     assert len(obs) == STATE_DIM, f"obs 維度錯誤：{len(obs)}，預期 {STATE_DIM}"
 
     with torch.no_grad():
-        _, _, mean_act = actor.sample(torch.FloatTensor(obs).unsqueeze(0).to(DEVICE))
-    target = mean_act.squeeze().cpu().numpy()[:len(TRADEABLE_STOCKS)]
+        # PortfolioActorLogitDelta.sample() 回傳 (w, new_logit, log_prob)
+        # 第一個回傳值 w (B, N_ACTIONS) 才是動作權重
+        w, _, _ = actor.sample(torch.FloatTensor(obs).unsqueeze(0).to(DEVICE))
+    mean_np = w.squeeze(0).cpu().numpy()
+    target = mean_np[:len(TRADEABLE_STOCKS)]
 
     recommendations = []
     for j, sid in enumerate(TRADEABLE_STOCKS):
